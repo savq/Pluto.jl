@@ -74,5 +74,5 @@ end
 
 
 "Returns whether or not the cell is **explicitely** disabled."
-is_disabled(c::Cell) = get(c.metadata, "disabled", false)
-can_show_logs(c::Cell) = get(c.metadata, "show_logs", true)
+is_disabled(c::Cell) = get(c.metadata, "disabled", DEFAULT_CELL_METADATA["disabled"])
+can_show_logs(c::Cell) = get(c.metadata, "show_logs", DEFAULT_CELL_METADATA["show_logs"])
