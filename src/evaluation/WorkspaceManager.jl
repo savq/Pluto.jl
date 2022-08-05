@@ -6,18 +6,18 @@ import ..Pluto.PkgCompat
 import ..Configuration: CompilerOptions, _merge_notebook_compiler_options, _convert_to_flags
 import ..Pluto.ExpressionExplorer: FunctionName
 import ..PlutoRunner
-import Distributed
+import Malt
 
 """
-Contains the Julia process (in the sense of `Distributed.addprocs`) to evaluate code in.
+Contains the Julia process to evaluate code in.
 Each notebook gets at most one `Workspace` at any time, but it can also have no `Workspace`
 (it cannot `eval` code in this case).
 """
 Base.@kwdef mutable struct Workspace
-    pid::Integer
+    pid::Malt.Worker # TODO(savq): Rename
     notebook_id::UUID
     discarded::Bool=false
-    remote_log_channel::Distributed.RemoteChannel
+    remote_log_channel::Channel
     module_name::Symbol
     dowork_token::Token=Token()
     nbpkg_was_active::Bool=false
@@ -28,70 +28,49 @@ end
 
 const SN = Tuple{ServerSession, Notebook}
 
+const active_workspaces = Dict{UUID,Task}()
+
+"Set of notebook IDs that we will never make a process for again."
+const discarded_workspaces = Set{UUID}()
+
 "These expressions get evaluated whenever a new `Workspace` process is created."
-const process_preamble = quote
-    ccall(:jl_exit_on_sigint, Cvoid, (Cint,), 0)
+process_preamble() = quote
+    Main.Base.exit_on_sigint(false)
     include($(project_relative_path(joinpath("src", "runner"), "Loader.jl")))
     ENV["GKSwstype"] = "nul"
     ENV["JULIA_REVISE_WORKER_ONLY"] = "1"
 end
 
-const Distributed_expr = quote
-    Base.loaded_modules[Base.PkgId(Base.UUID("8ba89e20-285c-5b6f-9357-94700520ee1b"), "Distributed")]
-end
-
-const workspaces = Dict{UUID,Task}()
-
-"Set of notebook IDs that we will never make a process for again."
-const discarded_workspaces = Set{UUID}()
-
 "Create a workspace for the notebook, optionally in the main process."
 function make_workspace((session, notebook)::SN; is_offline_renderer::Bool=false)::Workspace
     is_offline_renderer || (notebook.process_status = ProcessStatus.starting)
 
-    use_distributed = if is_offline_renderer
-        false
-    else
-        session.options.evaluation.workspace_use_distributed
-    end
+    @debug "Creating workspace process" notebook.path length(notebook.cells)
+    pid = create_workspaceprocess(;compiler_options=_merge_notebook_compiler_options(notebook, session.options.compiler))
 
-    pid = if use_distributed
-        @debug "Creating workspace process" notebook.path length(notebook.cells)
-        create_workspaceprocess(;compiler_options=_merge_notebook_compiler_options(notebook, session.options.compiler))
-    else
-        pid = Distributed.myid()
-        if !(isdefined(Main, :PlutoRunner) && Main.PlutoRunner isa Module)
-            # we make PlutoRunner available in Main, right now it's only defined inside this Pluto module.
-            @eval Main begin
-                PlutoRunner = $(PlutoRunner)
-            end
-        end
-        pid
-    end
-
-    Distributed.remotecall_eval(Main, [pid], quote
+    Malt.remote_eval_wait(pid, quote
         PlutoRunner.notebook_id[] = $(notebook.notebook_id)
     end)
 
-    remote_log_channel = Core.eval(Main, quote
-        $(Distributed).RemoteChannel(() -> eval(quote
-            channel = Channel{Any}(10)
-            Main.PlutoRunner.setup_plutologger(
-                $($(notebook.notebook_id)),
-                channel;
-                make_global=$($(use_distributed))
-            )
-            channel
-        end), $pid)
+    remote_log_channel = Malt.worker_channel(pid, quote
+        channel = Channel{Any}(10)
+        Main.PlutoRunner.setup_plutologger(
+            $(notebook.notebook_id),
+            channel;
+            make_global=false
+        )
+        channel
     end)
 
-    run_channel = Core.eval(Main, quote
-        $(Distributed).RemoteChannel(() -> eval(:(Main.PlutoRunner.run_channel)), $pid)
+    run_channel = Malt.worker_channel(pid, quote
+        Main.PlutoRunner.run_channel
     end)
 
     module_name = create_emptyworkspacemodule(pid)
 
-    original_LOAD_PATH, original_ACTIVE_PROJECT = Distributed.remotecall_eval(Main, pid, :(Base.LOAD_PATH, Base.ACTIVE_PROJECT[]))
+    original_LOAD_PATH, original_ACTIVE_PROJECT = Malt.remote_eval_fetch(pid, quote
+        Base.LOAD_PATH, Base.ACTIVE_PROJECT[]
+    end)
 
     workspace = Workspace(;
         pid,
@@ -122,20 +101,16 @@ function use_nbpkg_environment((session, notebook)::SN, workspace=nothing)
     workspace.discarded && return
 
     workspace.nbpkg_was_active = enabled
-    if workspace.pid != Distributed.myid()
-        new_LP = enabled ? ["@", "@stdlib"] : workspace.original_LOAD_PATH
-        new_AP = enabled ? PkgCompat.env_dir(notebook.nbpkg_ctx) : workspace.original_ACTIVE_PROJECT
+    new_LP = enabled ? ["@", "@stdlib"] : workspace.original_LOAD_PATH
+    new_AP = enabled ? PkgCompat.env_dir(notebook.nbpkg_ctx) : workspace.original_ACTIVE_PROJECT
 
-        Distributed.remotecall_eval(Main, [workspace.pid], quote
-            copy!(LOAD_PATH, $(new_LP))
-            Base.ACTIVE_PROJECT[] = $(new_AP)
-        end)
-    else
-        # TODO
-    end
+    Malt.remote_eval_wait(workspace.pid, quote
+        copy!(LOAD_PATH, $(new_LP))
+        Base.ACTIVE_PROJECT[] = $(new_AP)
+    end)
 end
 
-function start_relaying_self_updates((session, notebook)::SN, run_channel::Distributed.RemoteChannel)
+function start_relaying_self_updates((session, notebook)::SN, run_channel::Channel)
     while true
         try
             next_run_uuid = take!(run_channel)
@@ -151,7 +126,7 @@ function start_relaying_self_updates((session, notebook)::SN, run_channel::Distr
     end
 end
 
-function start_relaying_logs((session, notebook)::SN, log_channel::Distributed.RemoteChannel)
+function start_relaying_logs((session, notebook)::SN, log_channel::Channel)
     update_throttled, flush_throttled = Pluto.throttled(0.1) do
         Pluto.send_notebook_changes!(Pluto.ClientRequest(session=session, notebook=notebook))
     end
@@ -244,13 +219,13 @@ end
 function possible_bond_values(session_notebook::SN, n::Symbol; get_length::Bool=false)
     workspace = get_workspace(session_notebook)
 
-    Distributed.remotecall_eval(Main, workspace.pid, quote
+    Malt.remote_eval_fetch(workspace.pid, quote
         PlutoRunner.possible_bond_values($(QuoteNode(n)); get_length=$(get_length))
     end)
 end
 
-function create_emptyworkspacemodule(pid::Integer)::Symbol
-    Distributed.remotecall_eval(Main, pid, quote
+function create_emptyworkspacemodule(pid::Malt.Worker)::Symbol
+    Malt.remote_eval_fetch(pid, quote
         PlutoRunner.increment_current_module()
     end)
 end
@@ -258,17 +233,14 @@ end
 # NOTE: this function only start a worker process using given
 # compiler options, it does not resolve paths for notebooks
 # compiler configurations passed to it should be resolved before this
-function create_workspaceprocess(;compiler_options=CompilerOptions())::Integer
-    # run on proc 1 in case Pluto is being used inside a notebook process
-    # Workaround for "only process 1 can add/remove workers"
-    pid = Distributed.remotecall_eval(Main, 1, quote
-        $(Distributed_expr).addprocs(1; exeflags=$(_convert_to_flags(compiler_options))) |> first
-    end)
+function create_workspaceprocess(;compiler_options=CompilerOptions())::Malt.Worker
+    pid = Malt.Worker(;exeflags=_convert_to_flags(compiler_options)) # FIXME(savq): exeflags
 
-    Distributed.remotecall_eval(Main, [pid], process_preamble)
+    Malt.remote_eval_wait(pid, process_preamble())
 
+    ## NOTE(savq): This might not be necessary anymore:
     # so that we NEVER break the workspace with an interrupt 🤕
-    @async Distributed.remotecall_eval(Main, [pid], quote
+    @async Malt.remote_eval_wait(pid, quote
         while true
             try
                 wait()
@@ -292,9 +264,9 @@ function get_workspace(session_notebook::SN; allow_creation::Bool=true)::Union{N
     end
 
     task = if !allow_creation
-        get(workspaces, notebook.notebook_id, nothing)
+        get(active_workspaces, notebook.notebook_id, nothing)
     else
-        get!(workspaces, notebook.notebook_id) do
+        get!(active_workspaces, notebook.notebook_id) do
             Task(() -> make_workspace(session_notebook))
         end
     end
@@ -313,24 +285,17 @@ function unmake_workspace(session_notebook::SN; async::Bool=false, verbose::Bool
     workspace.discarded = true
     allow_restart || push!(discarded_workspaces, notebook.notebook_id)
 
-    if workspace.pid != Distributed.myid()
-        filter!(p -> fetch(p.second).pid != workspace.pid, workspaces)
-        t = @async begin
-            interrupt_workspace(workspace; verbose=false)
-            # run on proc 1 in case Pluto is being used inside a notebook process
-            # Workaround for "only process 1 can add/remove workers"
-            Distributed.remotecall_eval(Main, 1, quote
-                $(Distributed_expr).rmprocs($(workspace.pid))
-            end)
-        end
-        async || wait(t)
-    else
-        if !isready(workspace.dowork_token)
-            @error "Cannot unmake a workspace running inside the same process: the notebook is still running."
-        elseif verbose
-            @warn "Cannot unmake a workspace running inside the same process: the notebook might still be running. If you are sure that your code is not running the notebook async, then you can use the `verbose=false` keyword argument to disable this message."
-        end
-    end
+    # Interrupt worker execution
+    interrupt_workspace(workspace; verbose=false)
+
+    # End worker process
+    Malt.isrunning(workspace.pid) && Malt.stop(workspace.pid)
+
+    # Remove workspace from list of active workspaces
+    filter!(active_workspaces) do p
+        fetch(p.second).pid != workspace.pid
+     end
+
     nothing
 end
 
@@ -346,6 +311,7 @@ function distributed_exception_result(ex::Base.IOError, workspace::Workspace)
     )
 end
 
+### TODO(savq): Replace exception types
 function distributed_exception_result(exs::CompositeException, workspace::Workspace)
     ex = first(exs.exceptions)
 
@@ -406,13 +372,7 @@ function eval_format_fetch_in_workspace(
 
     workspace = get_workspace(session_notebook)
 
-    is_on_this_process = workspace.pid == Distributed.myid()
-
-    # if multiple notebooks run on the same process, then we need to `cd` between the different notebook paths
     if session_notebook isa Tuple
-        if is_on_this_process
-            cd_workspace(workspace, session_notebook[2].path)
-        end
         use_nbpkg_environment(session_notebook, workspace)
     end
 
@@ -422,7 +382,7 @@ function eval_format_fetch_in_workspace(
     take!(workspace.dowork_token)
     early_result = try
         # Use [pid] instead of pid to prevent fetching output
-        Distributed.remotecall_eval(Main, [workspace.pid], quote
+        Malt.remote_eval_wait(workspace.pid, quote
             PlutoRunner.run_expression(
                 getfield(Main, $(QuoteNode(workspace.module_name))),
                 $(QuoteNode(expr)),
@@ -431,7 +391,7 @@ function eval_format_fetch_in_workspace(
                 $function_wrapped_info,
                 $forced_expr_id;
                 user_requested_run=$user_requested_run,
-                capture_stdout=$(capture_stdout && !is_on_this_process),
+                capture_stdout=$capture_stdout,
             )
         end)
         put!(workspace.dowork_token)
@@ -453,10 +413,9 @@ end
 function eval_in_workspace(session_notebook::Union{SN,Workspace}, expr)
     workspace = get_workspace(session_notebook)
 
-    Distributed.remotecall_eval(Main, [workspace.pid], quote
+    Malt.remote_eval_wait(workspace.pid, quote
         Core.eval($(workspace.module_name), $(QuoteNode(expr)))
     end)
-    nothing
 end
 
 function format_fetch_in_workspace(
@@ -473,7 +432,7 @@ function format_fetch_in_workspace(
     # we format the cell output on the worker, and fetch the formatted output.
     withtoken(workspace.dowork_token) do
         try
-            Distributed.remotecall_eval(Main, workspace.pid, quote
+            Malt.remote_eval_fetch(workspace.pid, quote
                 PlutoRunner.formatted_result_of(
                     $(workspace.notebook_id),
                     $cell_id,
@@ -492,7 +451,7 @@ end
 function collect_soft_definitions(session_notebook::SN, modules::Set{Expr})
     workspace = get_workspace(session_notebook)
 
-    Distributed.remotecall_eval(Main, workspace.pid, quote
+    Malt.remote_eval_fetch(workspace.pid, quote
         PlutoRunner.collect_soft_definitions($(workspace.module_name), $modules)
     end)
 end
@@ -501,7 +460,7 @@ function macroexpand_in_workspace(session_notebook::Union{SN,Workspace}, macroca
     workspace = get_workspace(session_notebook)
     module_name = module_name === nothing ? workspace.module_name : module_name
 
-    Distributed.remotecall_eval(Main, workspace.pid, quote
+    Malt.remote_eval_fetch(workspace.pid, quote
         try
             (true, PlutoRunner.try_macroexpand($module_name, $cell_uuid, $(QuoteNode(macrocall))))
         catch error
@@ -521,7 +480,7 @@ end
 function eval_fetch_in_workspace(session_notebook::Union{SN,Workspace}, expr)
     workspace = get_workspace(session_notebook)
 
-    Distributed.remotecall_eval(Main, workspace.pid, quote
+    Malt.remote_eval_fetch(workspace.pid, quote
         Core.eval($(workspace.module_name), $(QuoteNode(expr)))
     end)
 end
@@ -529,7 +488,7 @@ end
 function do_reimports(session_notebook::Union{SN,Workspace}, module_imports_to_move::Set{Expr})
     workspace = get_workspace(session_notebook)
 
-    Distributed.remotecall_eval(Main, [workspace.pid], quote
+    Malt.remote_eval_wait(workspace.pid, quote
         PlutoRunner.do_reimports($(workspace.module_name), $module_imports_to_move)
     end)
 end
@@ -551,7 +510,7 @@ function move_vars(
     workspace = get_workspace(session_notebook)
     new_workspace_name = something(new_workspace_name, workspace.module_name)
 
-    Distributed.remotecall_eval(Main, [workspace.pid], quote
+    Malt.remote_eval_wait(workspace.pid, quote
         PlutoRunner.move_vars(
             $(QuoteNode(old_workspace_name)),
             $(QuoteNode(new_workspace_name)),
@@ -631,15 +590,11 @@ function interrupt_workspace(session_notebook::Union{SN,Workspace}; verbose=true
         return true
     end
 
+    # ## TODO(savq): These shouldn't be necessary with Malt
     if Sys.iswindows()
         verbose && @warn "Unfortunately, stopping cells is currently not supported on Windows :(
         Maybe the Windows Subsystem for Linux is right for you:
         https://docs.microsoft.com/en-us/windows/wsl"
-        return false
-    end
-
-    if workspace.pid == Distributed.myid()
-        verbose && @warn """Cells in this workspace can't be stopped, because it is not running in a separate workspace. Use `ENV["PLUTO_WORKSPACE_USE_DISTRIBUTED"]` to control whether future workspaces are generated in a separate process."""
         return false
     end
 
@@ -654,7 +609,7 @@ function interrupt_workspace(session_notebook::Union{SN,Workspace}; verbose=true
     # TODO: listen for the final words of the remote process on stdout/stderr: "Force throwing a SIGINT"
     try
         verbose && @info "Sending interrupt to process $(workspace.pid)"
-        Distributed.interrupt(workspace.pid)
+        Malt.interrupt(workspace.pid)
 
         if poll(() -> isready(workspace.dowork_token), 5.0, 5/100)
             verbose && println("Cell interrupted!")
@@ -662,17 +617,17 @@ function interrupt_workspace(session_notebook::Union{SN,Workspace}; verbose=true
         end
 
         verbose && println("Still running... starting sequence")
-        while !isready(workspace.dowork_token)
-            for _ in 1:5
-                verbose && print(" 🔥 ")
-                Distributed.interrupt(workspace.pid)
-                sleep(0.18)
-                if isready(workspace.dowork_token)
-                    break
-                end
-            end
-            sleep(1.5)
-        end
+        # while !isready(workspace.dowork_token)
+        #     for _ in 1:5
+        #         verbose && print(" 🔥 ")
+        #         Distributed.interrupt(workspace.pid)
+        #         sleep(0.18)
+        #         if isready(workspace.dowork_token)
+        #             break
+        #         end
+        #     end
+        #     sleep(1.5)
+        # end
         verbose && println()
         verbose && println("Cell interrupted!")
         true

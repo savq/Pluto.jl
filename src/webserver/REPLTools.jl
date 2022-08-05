@@ -1,5 +1,5 @@
 import FuzzyCompletions: complete_path, completion_text, score
-import Distributed
+import Malt
 import .PkgCompat: package_completions
 using Markdown
 import REPL
@@ -53,7 +53,7 @@ responses[:completepath] = function response_completepath(🙋::ClientRequest)
     # sort on score. If a tie (e.g. both score 0.0), sort on dir/file. If a tie, sort alphabetically.
     perm = sortperm(collect(zip(.-scores, (!isdirpath).(formatted), formatted)))
 
-    msg = UpdateMessage(:completion_result, 
+    msg = UpdateMessage(:completion_result,
         Dict(
             :start => start_utf8 - 1, # 1-based index (julia) to 0-based index (js)
             :stop => stop_utf8 - 1, # idem
@@ -79,14 +79,14 @@ responses[:complete] = function response_complete(🙋::ClientRequest)
         [(c,"package",true) for c in cs], (nextind(query, pos-length(p)):pos), true
     else
         workspace = WorkspaceManager.get_workspace((🙋.session, 🙋.notebook); allow_creation=false)
-        
+
         if will_run_code(🙋.notebook) && workspace isa WorkspaceManager.Workspace && isready(workspace.dowork_token)
             # we don't use eval_format_fetch_in_workspace because we don't want the output to be string-formatted.
             # This works in this particular case, because the return object, a `Completion`, exists in this scope too.
-            Distributed.remotecall_eval(Main, workspace.pid, :(PlutoRunner.completion_fetcher(
+            Malt.remote_eval_fetch(workspace.pid, :(PlutoRunner.completion_fetcher(
                 $query, $pos,
                 getfield(Main, $(QuoteNode(workspace.module_name))),
-                )))
+            )))
         else
             # We can at least autocomplete general julia things:
             PlutoRunner.completion_fetcher(query, pos, Main)
@@ -96,7 +96,7 @@ responses[:complete] = function response_complete(🙋::ClientRequest)
     start_utf8 = loc.start
     stop_utf8 = nextind(query, pos) # advance one unicode char, js uses exclusive upper bound
 
-    msg = UpdateMessage(:completion_result, 
+    msg = UpdateMessage(:completion_result,
         Dict(
             :start => start_utf8 - 1, # 1-based index (julia) to 0-based index (js)
             :stop => stop_utf8 - 1, # idem
@@ -125,7 +125,7 @@ responses[:docs] = function response_docs(🙋::ClientRequest)
         workspace = WorkspaceManager.get_workspace((🙋.session, 🙋.notebook); allow_creation=false)
 
         if will_run_code(🙋.notebook) && workspace isa WorkspaceManager.Workspace && isready(workspace.dowork_token)
-            Distributed.remotecall_eval(Main, workspace.pid, :(PlutoRunner.doc_fetcher(
+            Malt.remote_eval_fetch(workspace.pid, :(PlutoRunner.doc_fetcher(
                 $query,
                 getfield(Main, $(QuoteNode(workspace.module_name))),
             )))
@@ -134,7 +134,7 @@ responses[:docs] = function response_docs(🙋::ClientRequest)
         end
     end
 
-    msg = UpdateMessage(:doc_result, 
+    msg = UpdateMessage(:doc_result,
         Dict(
             :status => status,
             :doc => doc_html,

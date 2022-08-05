@@ -9,7 +9,7 @@
 # SOME EXTRA NOTES
 
 # 1. The entire PlutoRunner should be a single file.
-# 2. We restrict the communication between this PlutoRunner and the Pluto server to only use *Base Julia types*, like `String`, `Dict`, `NamedTuple`, etc. 
+# 2. We restrict the communication between this PlutoRunner and the Pluto server to only use *Base Julia types*, like `String`, `Dict`, `NamedTuple`, etc.
 
 # These restriction are there to allow flexibility in the way that this file is loaded on a runner process, which is something that we might want to change in the future, like when we make the transition to our own Distributed.
 
@@ -88,6 +88,7 @@ function increment_current_module()::Symbol
     new_module = Core.eval(Main, :(
         module $(new_workspace_name)
             $(workspace_preamble...)
+            # FIXME
             const var"#___this_module_name" = $(new_workspace_name)
         end
     ))
@@ -154,8 +155,8 @@ function globalref_to_workspaceref(expr)
 
     Expr(:block,
         # Create new lines to assign to the replaced names of the global refs.
-        # This way the expression explorer doesn't care (it just sees references to variables outside of the workspace), 
-        # and the variables don't get overwriten by local assigments to the same name (because we have special names). 
+        # This way the expression explorer doesn't care (it just sees references to variables outside of the workspace),
+        # and the variables don't get overwriten by local assigments to the same name (because we have special names).
         (mutable_ref_list .|> ref -> :(local $(ref[2])))...,
         map(mutable_ref_list) do ref
             # I can just do Expr(:isdefined, ref[1]) here, but it feels better to macroexpand,
@@ -591,14 +592,14 @@ function run_expression(
             end
         end
     end
-    
+
     currently_running_cell_id[] = old_currently_running_cell_id
-    
+
 
     if (result isa CapturedException) && (result.ex isa InterruptException)
         throw(result.ex)
     end
-    
+
     cell_results[cell_id], cell_runtimes[cell_id] = result, runtime
 end
 precompile(run_expression, (Module, Expr, UUID, UUID, Nothing, Nothing))
@@ -849,11 +850,11 @@ const tree_display_extra_items = Dict{UUID,Dict{ObjectDimPair,Int64}}()
 const FormattedCellResult = NamedTuple{(:output_formatted, :errored, :interrupted, :process_exited, :runtime, :published_objects, :has_pluto_hook_features),Tuple{PlutoRunner.MimedOutput,Bool,Bool,Bool,Union{UInt64,Nothing},Dict{String,Any},Bool}}
 
 function formatted_result_of(
-    notebook_id::UUID, 
-    cell_id::UUID, 
-    ends_with_semicolon::Bool, 
+    notebook_id::UUID,
+    cell_id::UUID,
+    ends_with_semicolon::Bool,
     known_published_objects::Vector{String}=String[],
-    showmore::Union{ObjectDimPair,Nothing}=nothing, 
+    showmore::Union{ObjectDimPair,Nothing}=nothing,
     workspace::Module=Main,
 )::FormattedCellResult
     load_integrations_if_needed()
@@ -878,15 +879,15 @@ function formatted_result_of(
     else
         ("", MIME"text/plain"())
     end
-    
+
     published_objects = get(cell_published_objects, cell_id, Dict{String,Any}())
-    
+
     for k in known_published_objects
         if haskey(published_objects, k)
             published_objects[k] = nothing
         end
     end
-    
+
     return (;
         output_formatted,
         errored,
@@ -931,18 +932,18 @@ end
 Base.IOContext(io::IOContext, ::Nothing) = io
 
 "The `IOContext` used for converting arbitrary objects to pretty strings."
-const default_iocontext = IOContext(devnull, 
-    :color => false, 
-    :limit => true, 
-    :displaysize => (18, 88), 
-    :is_pluto => true, 
+const default_iocontext = IOContext(devnull,
+    :color => false,
+    :limit => true,
+    :displaysize => (18, 88),
+    :is_pluto => true,
     :pluto_supported_integration_features => supported_integration_features,
 )
 
-const default_stdout_iocontext = IOContext(devnull, 
-    :color => true, 
-    :limit => true, 
-    :displaysize => (18, 75), 
+const default_stdout_iocontext = IOContext(devnull,
+    :color => true,
+    :limit => true,
+    :displaysize => (18, 75),
     :is_pluto => false,
 )
 
@@ -1021,7 +1022,7 @@ function format_output(binding::Base.Docs.Binding; context=default_iocontext)
         <span>$(binding.var)</span>
         $(repr(MIME"text/html"(), Base.Docs.doc(binding)))
         </div>
-        """, MIME"text/html"()) 
+        """, MIME"text/html"())
     catch e
         @warn "Failed to pretty-print binding" exception=(e, catch_backtrace())
         repr(binding, MIME"text/plain"())
@@ -1369,7 +1370,7 @@ function tree_data(@nospecialize(x::Any), context::Context)
         return circular(x)
     else
         depth = get(context, :tree_viewer_depth, 0)
-        recur_io = IOContext(context, 
+        recur_io = IOContext(context,
             Pair{Symbol,Any}(:SHOWN_SET, x),
             Pair{Symbol,Any}(:typeinfo, Any),
             Pair{Symbol,Any}(:tree_viewer_depth, depth + 1),
@@ -1509,7 +1510,7 @@ const integrations = Integration[
                         push!(row_data, (length(rows), row_data_for(last(rows))))
                     end
                 end
-                
+
                 # TODO: render entire schema by default?
 
                 schema = Tables.schema(rows)
@@ -1738,7 +1739,7 @@ function doc_fetcher(query, workspace::Module)
             # which is a bit silly, but turns out it actuall is markdown if you look hard enough.
             doc_md = Markdown.parse(repr(doc_md))
         end
-        
+
         (repr(MIME("text/html"), doc_md), :👍)
     catch ex
         (nothing, :👎)
@@ -1790,16 +1791,16 @@ function possible_bond_values(s::Symbol; get_length::Bool=false)
         :InfinitePossibilities
     elseif (possible_values isa AbstractPlutoDingetjes.Bonds.NotGiven)
         # error("Bond \"$s\" did not specify its possible values with `AbstractPlutoDingetjes.Bond.possible_values()`. Try using PlutoUI for the `@bind` values.")
-        
+
         # If you change this, change it everywhere in this file.
         :NotGiven
     else
-        get_length ? 
+        get_length ?
             try
                 length(possible_values)
             catch
                 length(make_distributed_serializable(possible_values))
-            end : 
+            end :
             make_distributed_serializable(possible_values)
     end
 end
@@ -1873,7 +1874,7 @@ x^2
 The first cell will show a slider as the cell's output, ranging from 0 until 100.
 The second cell will show the square of `x`, and is updated in real-time as the slider is moved.
 """
-macro bind(def, element)    
+macro bind(def, element)
 	if def isa Symbol
 		quote
             $(load_integrations_if_needed)()
@@ -1922,7 +1923,7 @@ const currently_running_cell_id = Ref{UUID}(uuid4())
 
 function _publish(x, id_start)::String
     assertpackable(x)
-    
+
     id = string(notebook_id[], "/", currently_running_cell_id[], "/", id_start)
     d = get!(Dict{String,Any}, cell_published_objects, currently_running_cell_id[])
     d[id] = x
@@ -1943,8 +1944,8 @@ function Base.show(io::IO, ::MIME"text/javascript", published::PublishedToJavasc
     end
     write(io, "/* See the documentation for PlutoRunner.publish_to_js */ getPublishedObject(\"$(published.published_id)\")")
 end
-Base.show(io::IO, ::MIME"text/plain", published::PublishedToJavascript) = show(io, MIME("text/javascript"), published)    
-Base.show(io::IO, published::PublishedToJavascript) = show(io, MIME("text/javascript"), published)    
+Base.show(io::IO, ::MIME"text/plain", published::PublishedToJavascript) = show(io, MIME("text/javascript"), published)
+Base.show(io::IO, published::PublishedToJavascript) = show(io, MIME("text/javascript"), published)
 
 """
     publish_to_js(x)
@@ -2003,7 +2004,7 @@ end
 
 function Base.show(io::IO, m::MIME"text/html", e::EmbeddableDisplay)
     body, mime = format_output_default(e.x, io)
-	
+
     to_write = if mime === m && _EmbeddableDisplay_enable_html_shortcut[]
         # In this case, we can just embed the HTML content directly.
         body
@@ -2011,14 +2012,14 @@ function Base.show(io::IO, m::MIME"text/html", e::EmbeddableDisplay)
         s = """<pluto-display></pluto-display><script id=$(e.script_id)>
 
         // see https://plutocon2021-demos.netlify.app/fonsp%20%E2%80%94%20javascript%20inside%20pluto to learn about the techniques used in this script
-        
+
         const body = $(publish_to_js(body, e.script_id));
         const mime = "$(string(mime))";
-        
+
         const create_new = this == null || this._mime !== mime;
-        
+
         const display = create_new ? currentScript.previousElementSibling : this;
-        
+
         display.persist_js_state = true;
         display.body = body;
         if(create_new) {
@@ -2030,7 +2031,7 @@ function Base.show(io::IO, m::MIME"text/html", e::EmbeddableDisplay)
         return display;
 
         </script>"""
-        
+
         replace(replace(s, r"//.+" => ""), "\n" => "")
     end
     write(io, to_write)
@@ -2041,7 +2042,7 @@ export embed_display
 """
     embed_display(x)
 
-A wrapper around any object that will display it using Pluto's interactive multimedia viewer (images, arrays, tables, etc.), the same system used to display cell output. The returned object can be **embedded in HTML output** (we recommend [HypertextLiteral.jl](https://github.com/MechanicalRabbit/HypertextLiteral.jl) or [HyperScript.jl](https://github.com/yurivish/Hyperscript.jl)), which means that you can use it to create things like _"table viewer left, plot right"_. 
+A wrapper around any object that will display it using Pluto's interactive multimedia viewer (images, arrays, tables, etc.), the same system used to display cell output. The returned object can be **embedded in HTML output** (we recommend [HypertextLiteral.jl](https://github.com/MechanicalRabbit/HypertextLiteral.jl) or [HyperScript.jl](https://github.com/yurivish/Hyperscript.jl)), which means that you can use it to create things like _"table viewer left, plot right"_.
 
 # Example
 
@@ -2092,8 +2093,8 @@ Base.@kwdef struct DivElement
 end
 
 tree_data(@nospecialize(e::DivElement), context::Context) = Dict{Symbol, Any}(
-    :style => e.style, 
-    :classname => e.class, 
+    :style => e.style,
+    :classname => e.class,
     :children => Any[
         format_output_default(value, context) for value in e.children
     ],
@@ -2140,9 +2141,9 @@ function Logging.handle_message(pl::PlutoLogger, level, msg, _module, group, id,
     # println("with types: ", "_module: ", typeof(_module), ", ", "msg: ", typeof(msg), ", ", "group: ", typeof(group), ", ", "id: ", typeof(id), ", ", "file: ", typeof(file), ", ", "line: ", typeof(line), ", ", "kwargs: ", typeof(kwargs)) # thanks Copilot
 
     try
-        
+
         yield()
-        
+
         put!(pl.log_channel, Dict{String,Any}(
             "level" => string(level),
             "msg" => format_output_default(msg isa AbstractString ? Text(msg) : msg),
@@ -2154,9 +2155,9 @@ function Logging.handle_message(pl::PlutoLogger, level, msg, _module, group, id,
             "kwargs" => Tuple{String,Any}[(string(k), format_log_value(v)) for (k, v) in kwargs],
             )
         )
-        
+
         yield()
-        
+
         # Also print to console (disabled)
         # Logging.handle_message(old_logger[], level, msg, _module, group, id, file, line; kwargs...)
     catch e
@@ -2174,7 +2175,7 @@ function with_io_to_logs(f::Function; enabled::Bool=true, loglevel::Logging.LogL
         return f()
     end
     # Taken from https://github.com/JuliaDocs/IOCapture.jl/blob/master/src/IOCapture.jl with some modifications to make it log.
-    
+
     # Original implementation from Documenter.jl (MIT license)
     # Save the default output streams.
     default_stdout = stdout
@@ -2230,9 +2231,9 @@ end
 
 
 function setup_plutologger(notebook_id::UUID, log_channel::Channel{Any}; make_global::Bool=false)
-    logger = pluto_loggers[notebook_id] = 
+    logger = pluto_loggers[notebook_id] =
         PlutoLogger(nothing, log_channel, Ref{UUID}(uuid4()))
-    
+
     if make_global
         old_logger[] = Logging.global_logger()
         Logging.global_logger(logger)
