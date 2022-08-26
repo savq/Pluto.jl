@@ -83,7 +83,7 @@ responses[:complete] = function response_complete(🙋::ClientRequest)
         if will_run_code(🙋.notebook) && workspace isa WorkspaceManager.Workspace && isready(workspace.dowork_token)
             # we don't use eval_format_fetch_in_workspace because we don't want the output to be string-formatted.
             # This works in this particular case, because the return object, a `Completion`, exists in this scope too.
-            Malt.remote_eval_fetch(workspace.pid, :(PlutoRunner.completion_fetcher(
+            Malt.remote_eval_fetch(workspace.worker, :(PlutoRunner.completion_fetcher(
                 $query, $pos,
                 getfield(Main, $(QuoteNode(workspace.module_name))),
             )))
@@ -125,7 +125,7 @@ responses[:docs] = function response_docs(🙋::ClientRequest)
         workspace = WorkspaceManager.get_workspace((🙋.session, 🙋.notebook); allow_creation=false)
 
         if will_run_code(🙋.notebook) && workspace isa WorkspaceManager.Workspace && isready(workspace.dowork_token)
-            Malt.remote_eval_fetch(workspace.pid, :(PlutoRunner.doc_fetcher(
+            Malt.remote_eval_fetch(workspace.worker, :(PlutoRunner.doc_fetcher(
                 $query,
                 getfield(Main, $(QuoteNode(workspace.module_name))),
             )))
