@@ -234,11 +234,11 @@ end
 # compiler options, it does not resolve paths for notebooks
 # compiler configurations passed to it should be resolved before this
 function create_workspaceprocess(;compiler_options=CompilerOptions())::Malt.Worker
-    worker = Malt.Worker(;exeflags=_convert_to_flags(compiler_options)) # FIXME(savq): exeflags
+    worker = Malt.Worker(;exeflags=_convert_to_flags(compiler_options))
 
     Malt.remote_eval_wait(worker, process_preamble())
 
-    ## NOTE(savq): This might not be necessary anymore:
+    ## TODO(savq): This might not be necessary anymore:
     # so that we NEVER break the workspace with an interrupt 🤕
     @async Malt.remote_eval_wait(worker, quote
         while true
@@ -299,6 +299,7 @@ function unmake_workspace(session_notebook::SN; async::Bool=false, verbose::Bool
     nothing
 end
 
+## TODO(savq): Rename these methods. They no longer have anything to do with distributed.
 function distributed_exception_result(ex::Base.IOError, workspace::Workspace)
     (
         output_formatted=PlutoRunner.format_output(CapturedException(ex, [])),
@@ -311,13 +312,10 @@ function distributed_exception_result(ex::Base.IOError, workspace::Workspace)
     )
 end
 
-### TODO(savq): Replace exception types
 function distributed_exception_result(exs::CompositeException, workspace::Workspace)
     ex = first(exs.exceptions)
 
-    if ex isa Distributed.RemoteException &&
-        ex.pid == workspace.pid &&
-        ex.captured.ex isa InterruptException
+    if ex.captured.ex isa InterruptException
         (
             output_formatted=PlutoRunner.format_output(CapturedException(InterruptException(), [])),
             errored=true,
@@ -327,7 +325,7 @@ function distributed_exception_result(exs::CompositeException, workspace::Worksp
             published_objects=Dict{String,Any}(),
             has_pluto_hook_features=false,
         )
-    elseif ex isa Distributed.ProcessExitedException
+    elseif ex isa Malt.TerminateWorkerException
         (
             output_formatted=PlutoRunner.format_output(CapturedException(exs, [])),
             errored=true,
