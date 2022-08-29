@@ -68,7 +68,7 @@ import Distributed
 
         client = ClientSession(:fakeA, nothing)
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = true
+        🍭.options.evaluation.capture_stdout = false
         🍭.connected_clients[client.id] = client
 
         notebook = Notebook([
@@ -107,11 +107,6 @@ import Distributed
         setcode!(notebook.cells[5], "Pluto.SessionActions.shutdown(s, nb)")
         update_run!(🍭, notebook, notebook.cells[5])
         @test noerror(notebook.cells[5])
-
-        while Distributed.nprocs() != desired_nprocs
-            sleep(.1)
-        end
-        sleep(.1)
 
         WorkspaceManager.unmake_workspace((🍭, notebook))
     end
