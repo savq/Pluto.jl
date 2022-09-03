@@ -208,7 +208,6 @@ end
 
     @testset "Cell Metadata" begin
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = false
         fakeclient = ClientSession(:fake, nothing)
         🍭.connected_clients[fakeclient.id] = fakeclient
 
@@ -245,7 +244,6 @@ end
 
     @testset "Notebook Metadata" begin
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = false
         fakeclient = ClientSession(:fake, nothing)
         🍭.connected_clients[fakeclient.id] = fakeclient
 
@@ -272,7 +270,6 @@ end
 
     @testset "Skip as script" begin
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = false
         fakeclient = ClientSession(:fake, nothing)
         🍭.connected_clients[fakeclient.id] = fakeclient
 

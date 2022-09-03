@@ -5,8 +5,6 @@ using Pluto: update_run!, ServerSession, ClientSession, Cell, Notebook
 
 @testset "CellDepencencyVisualization" begin
     🍭 = ServerSession()
-    🍭.options.evaluation.workspace_use_distributed = false
-
     fakeclient = ClientSession(:fake, nothing)
     🍭.connected_clients[fakeclient.id] = fakeclient
 

@@ -2,7 +2,6 @@ using Test
 using Pluto.Configuration: CompilerOptions
 using Pluto.WorkspaceManager: _merge_notebook_compiler_options
 import Pluto: update_save_run!, update_run!, WorkspaceManager, ClientSession, ServerSession, Notebook, Cell, project_relative_path
-import Distributed
 
 @testset "Workspace manager" begin
 # basic functionality is already tested by the reactivity tests
@@ -12,7 +11,6 @@ import Distributed
         fakeclientA = ClientSession(:fakeA, nothing)
         fakeclientB = ClientSession(:fakeB, nothing)
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = true
         🍭.connected_clients[fakeclientA.id] = fakeclientA
         🍭.connected_clients[fakeclientB.id] = fakeclientB
 
@@ -44,7 +42,6 @@ import Distributed
     @testset "Variables with secret names" begin
         fakeclient = ClientSession(:fake, nothing)
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = false
         🍭.connected_clients[fakeclient.id] = fakeclient
 
         notebook = Notebook([
@@ -68,7 +65,7 @@ import Distributed
 
         client = ClientSession(:fakeA, nothing)
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = true
+        🍭.options.evaluation.capture_stdout = false
         🍭.connected_clients[client.id] = client
 
         notebook = Notebook([
@@ -103,13 +100,18 @@ import Distributed
         @test notebook.cells[5] |> noerror
 
 
-        desired_nprocs = Distributed.nprocs() - 1
+        # TODO(savq): Does this work on Windows?
+        count_jl_procs() = pipeline(`ps`, `grep 'julia'`) |> readlines |> length
+
+        desired_nprocs = count_jl_procs() - 1
+
         setcode!(notebook.cells[5], "Pluto.SessionActions.shutdown(s, nb)")
         update_run!(🍭, notebook, notebook.cells[5])
         @test noerror(notebook.cells[5])
 
-        while Distributed.nprocs() != desired_nprocs
-            sleep(.1)
+        while (_p_count = count_jl_procs()) != desired_nprocs
+            sleep(1)
+            @info "proc count is $(_p_count)"
         end
         sleep(.1)
 

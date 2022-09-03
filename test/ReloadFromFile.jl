@@ -1,14 +1,12 @@
 using Test
 import Pluto: Configuration, Notebook, ServerSession, ClientSession, update_run!, Cell, WorkspaceManager, SessionActions
 import Pluto.Configuration: Options, EvaluationOptions
-import Distributed
 using Pluto.WorkspaceManager: poll
 import Pkg
 
 @testset "Reload from file" begin
     
     🍭 = ServerSession()
-    🍭.options.evaluation.workspace_use_distributed = false
     🍭.options.server.auto_reload_from_file = true
     
     
@@ -37,7 +35,7 @@ import Pkg
     @test poll(30) do
         length(notebook.cells) == 3
     end
-    @test poll(5) do
+    @test poll(10) do
         notebook.cells[1].output.body == "123"
     end
     @test poll(5) do

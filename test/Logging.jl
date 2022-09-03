@@ -5,7 +5,6 @@ using Pluto.WorkspaceManager: poll
 
 @testset "Logging" begin
     🍭 = ServerSession()
-    🍭.options.evaluation.workspace_use_distributed = true
 
     fakeclient = ClientSession(:fake, nothing)
     🍭.connected_clients[fakeclient.id] = fakeclient

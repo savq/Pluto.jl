@@ -1,17 +1,15 @@
 using Test
 import Pluto
 import Pluto: update_run!, WorkspaceManager, ClientSession, ServerSession, Notebook, Cell
-import Distributed
+import Malt
 
 @testset "Bonds" begin
 
     🍭 = ServerSession()
-    🍭.options.evaluation.workspace_use_distributed = false
     fakeclient = ClientSession(:fake, nothing)
     🍭.connected_clients[fakeclient.id] = fakeclient
     
     @testset "AbstractPlutoDingetjes.jl" begin
-        🍭.options.evaluation.workspace_use_distributed = true
         notebook = Notebook([
                 # 1
                 Cell("""
@@ -248,7 +246,7 @@ import Distributed
         
         
         @test Pluto.possible_bond_values(🍭, notebook, :x_new) == [1,2,3]
-        @test_throws Exception Pluto.possible_bond_values(🍭, notebook, :asdfasdfx_new)
+        @test Pluto.possible_bond_values(🍭, notebook, :asdfasdfx_new) == KeyError(:asdfasdfx_new)
         @test Pluto.possible_bond_values(🍭, notebook, :pv1) == :NotGiven
         @test Pluto.possible_bond_values(🍭, notebook, :pv2) == :InfinitePossibilities
         @test Pluto.possible_bond_values(🍭, notebook, :pv3) == [1,2,3]
@@ -302,14 +300,13 @@ import Distributed
         
         
         WorkspaceManager.unmake_workspace((🍭, notebook))
-        🍭.options.evaluation.workspace_use_distributed = false
         
         
         # test that the notebook file is runnable:
         
-        test_proc = Distributed.addprocs(1)[1]
+        test_worker = Malt.Worker()
         
-        Distributed.remotecall_eval(Main, test_proc, quote
+        Malt.remote_eval_fetch(test_worker, quote
             import Pkg
             try
                 Pkg.UPDATED_REGISTRY_THIS_SESSION[] = true
@@ -317,19 +314,17 @@ import Distributed
             Pkg.activate(mktempdir())
             Pkg.add("AbstractPlutoDingetjes")
         end)
-        @test Distributed.remotecall_eval(Main, test_proc, quote
+        @test Malt.remote_eval_fetch(test_worker, quote
             include($(notebook.path))
             true
         end)
-        Distributed.rmprocs(test_proc)
+        Malt.stop(test_worker)
     end
 
     @testset "Dependent Bound Variables" begin
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = false
         fakeclient = ClientSession(:fake, nothing)
         🍭.connected_clients[fakeclient.id] = fakeclient
-        🍭.options.evaluation.workspace_use_distributed = true
         notebook = Notebook([
             Cell(raw"""@bind x HTML("<input type=range min=1 max=10>")"""),
             Cell(raw"""@bind y HTML("<input type=range min=1 max=$(x)>")"""),

@@ -181,7 +181,6 @@ end
     @testset "PlutoRunner API" begin
         fakeclient = ClientSession(:fake, nothing)
         🍭 = ServerSession()
-        🍭.options.evaluation.workspace_use_distributed = true
         🍭.connected_clients[fakeclient.id] = fakeclient
 
         notebook = Notebook([

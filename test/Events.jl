@@ -14,7 +14,6 @@ import UUIDs: UUID
     end
     🍭 = ServerSession()
     🍭.options.server.on_event = test_listener
-    🍭.options.evaluation.workspace_use_distributed = false
 
     fakeclient = ClientSession(:fake, nothing)
     🍭.connected_clients[fakeclient.id] = fakeclient
